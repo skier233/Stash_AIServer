@@ -1,0 +1,88 @@
+version: '3.8'
+
+services:
+  # NGINX Reverse Proxy with HTTPS
+  nginx-https:
+    image: nginx:alpine
+    container_name: stash-ai-nginx
+    ports:
+      - "8443:443"  # HTTPS port
+      - "8080:80"   # HTTP redirect
+    volumes:
+      - ./nginx.https.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - stash-ai-server
+    networks:
+      - stash-ai-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # StashAI Gateway Service (internal)
+  stash-ai-server:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: stash-ai-server
+    # Remove external port exposure - only internal
+    expose:
+      - "8080"
+    environment:
+      - PYTHONPATH=/app
+      - LOG_LEVEL=info
+      - VISAGE_URL=http://visage:8000
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      - visage
+    networks:
+      - stash-ai-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Visage Facial Recognition Service
+  visage:
+    build:
+      context: ./BackendServers/visage
+      dockerfile: Dockerfile
+    container_name: visage
+    expose:
+      - "8000"
+      - "7860"
+    environment:
+      - MPLCONFIGDIR=/code/matplotlib
+      - DEEPFACE_HOME=/code/.deepface
+    volumes:
+      - visage-models:/code/models
+      - visage-data:/code/data
+      - visage-deepface:/code/.deepface
+    networks:
+      - stash-ai-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/person_names"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 120s
+
+volumes:
+  visage-models:
+    driver: local
+  visage-data:
+    driver: local
+  visage-deepface:
+    driver: local
+
+networks:
+  stash-ai-network:
+    driver: bridge

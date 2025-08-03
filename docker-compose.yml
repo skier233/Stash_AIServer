@@ -1,0 +1,73 @@
+# =============================================================================
+# StashAI Server - Docker Compose Configuration
+# =============================================================================
+
+
+services:
+  # StashAI Gateway Service
+  stash-ai-server:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: stash-ai-server
+    ports:
+      - "8080:8080"
+    environment:
+      - PYTHONPATH=/app
+      - LOG_LEVEL=info
+      - VISAGE_URL=http://visage:8000
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    depends_on:
+      - visage
+    networks:
+      - stash-ai-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Visage Facial Recognition Service
+  visage:
+    build:
+      context: ./BackendServers/visage
+      dockerfile: Dockerfile
+    container_name: visage
+    ports:
+      - "8000:8000"
+      - "7860:7860"  # Gradio interface
+    environment:
+      - MPLCONFIGDIR=/code/matplotlib
+      - DEEPFACE_HOME=/code/.deepface
+    volumes:
+      - visage-models:/code/models
+      - visage-data:/code/data
+      - visage-deepface:/code/.deepface
+    networks:
+      - stash-ai-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/person_names"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 120s
+
+volumes:
+  visage-models:
+    driver: local
+  visage-data:
+    driver: local
+  visage-deepface:
+    driver: local
+
+networks:
+  stash-ai-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
