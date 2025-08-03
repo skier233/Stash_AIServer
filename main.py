@@ -22,24 +22,24 @@ from schemas.api_schema import (
     FacialRecognitionResponse, FaceComparisonResponse,
     ContentAnalysisRequest, ContentAnalysisResponse,
     BatchRequest, BatchResponse, BatchJobStatus,
-    HealthCheckResponse, ServiceInfo, APIError,
+    HealthCheckResponse, ServiceInfo,
     FaceInfo, StashEntity,
     
     # Enums
     ServiceType, ProcessingStatus
 )
 from services.service_registry import ServiceRegistry, ServiceDiscovery, BatchProcessingContext, create_default_registry
-from services.visage_adapter import VisageAdapter, create_visage_adapter
+from services.visage.visage_adapter import VisageAdapter, create_visage_adapter
 from simple_queue import simple_queue, JobStatus
 
 # Database imports
-from database.database import initialize_database, get_db, db_manager
+from database.database import get_database_path, initialize_database, get_db, db_manager
 from database.interactions_service import interactions_service
-from database.migrations import verify_database_version, run_startup_migration, CURRENT_SCHEMA_VERSION
+from database.migrations import CURRENT_SCHEMA_VERSION, verify_and_migrate_database, verify_database_version
 from database.models import (
-    AIJobCreate, AIJobUpdate, AIJobResponse, AIJobHistoryQuery, AIJobHistoryResponse,
-    AITestCreate, AITestUpdate, AITestResponse,
-    InteractionCreate, InteractionResponse, EntityType, AIActionType, ProcessingStatus, AIModel
+    AIJobCreate, AIJobUpdate, AIJobResponse, AIJobHistoryQuery,
+    AITestCreate, AITestResponse,
+    InteractionCreate, EntityType, AIActionType, ProcessingStatus, AIModel
 )
 
 # =============================================================================
@@ -51,70 +51,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-# =============================================================================
-# Database Migration Functions
-# =============================================================================
-
-async def verify_and_migrate_database():
-    """Verify database version and run migrations on startup"""
-    try:
-        # Get database path from DATABASE_URL (for SQLite databases)
-        from database.database import DATABASE_URL
-        if DATABASE_URL.startswith("sqlite:///"):
-            database_path = DATABASE_URL.replace("sqlite:///", "")
-        else:
-            # For non-SQLite databases, use a fallback or skip migration
-            logger.info("Non-SQLite database detected - skipping file-based migration")
-            return
-            
-        logger.info(f"Using database path: {database_path}")
-        
-        # Verify current database status
-        db_status = verify_database_version(database_path)
-        
-        logger.info(f"Database version check:")
-        logger.info(f"  Current version: {db_status['current_version']}")
-        logger.info(f"  Target version: {db_status['target_version']}")
-        logger.info(f"  Needs migration: {db_status['needs_migration']}")
-        logger.info(f"  Schema tables exist: {db_status['schema_tables_exist']}")
-        
-        # Run migration if needed
-        if db_status['needs_migration']:
-            logger.info("Database migration required - starting migration process")
-            
-            migration_success = run_startup_migration(database_path)
-            
-            if migration_success:
-                logger.info(f"✅ Database successfully migrated to version {CURRENT_SCHEMA_VERSION}")
-                
-                # Verify migration completed successfully
-                updated_status = verify_database_version(database_path)
-                if updated_status['current_version'] == CURRENT_SCHEMA_VERSION:
-                    logger.info("✅ Migration verification passed")
-                else:
-                    logger.warning(f"⚠️ Migration verification failed - expected {CURRENT_SCHEMA_VERSION}, got {updated_status['current_version']}")
-            else:
-                logger.error("❌ Database migration failed - server may have compatibility issues")
-                logger.error("Please check migration logs and database backups")
-                # Don't raise exception - allow server to start with legacy support
-        else:
-            logger.info(f"✅ Database is up to date (version {db_status['current_version']})")
-        
-        # Log table status for debugging
-        if not db_status['schema_tables_exist']:
-            logger.info("Schema tables not fully available - running in legacy compatibility mode")
-            missing_tables = [table for table, exists in db_status['table_status'].items() if not exists]
-            if missing_tables:
-                logger.info(f"Missing schema tables: {missing_tables}")
-        else:
-            logger.info("✅ All schema tables are available")
-            
-    except Exception as e:
-        logger.error(f"Database verification/migration failed: {e}")
-        import traceback
-        logger.error(f"Migration error traceback: {traceback.format_exc()}")
-        # Don't raise - allow server to continue with legacy support
 
 # =============================================================================
 # Global State
@@ -211,6 +147,12 @@ app.add_middleware(
     allowed_hosts=["*"]  # Configure based on your needs
 )
 
+from routes import serviceinfo_routes, database_routes, ai_jobs_routes
+
+app.include_router(serviceinfo_routes.router)
+app.include_router(database_routes.router)
+app.include_router(ai_jobs_routes.router)
+
 # =============================================================================
 # WebSocket Connection Manager
 # =============================================================================
@@ -269,31 +211,9 @@ def generate_request_id() -> str:
     """Generate a unique request ID"""
     return str(uuid.uuid4())
 
-async def get_service_for_request(service_type: ServiceType, capability: Optional[str] = None, allow_busy: bool = True):
-    """Get an available service for a request with enhanced resilience"""
-    if not service_discovery:
-        raise HTTPException(status_code=503, detail="Service discovery not available")
-    
-    service = service_discovery.find_best_service(service_type, capability, allow_busy=allow_busy)
-    if not service:
-        available_services = service_registry.get_services_by_type(service_type) if service_registry else []
-        service_names = [(s.name, s.status.value) for s in available_services]
-        
-        # Provide more informative error message
-        if available_services:
-            service_status_msg = ", ".join([f"{name}({status})" for name, status in service_names])
-            detail = f"No available {service_type} services. Status: {service_status_msg}"
-        else:
-            detail = f"No {service_type} services registered"
-            
-        raise HTTPException(status_code=503, detail=detail)
-    
-    return service
-
 async def create_visage_client() -> VisageAdapter:
     """Create a Visage adapter client"""
-    visage_service = await get_service_for_request(ServiceType.FACIAL_RECOGNITION, "facial_recognition")
-    return create_visage_adapter(base_url=visage_service.endpoint)
+    return create_visage_adapter()
 
 def create_ai_job_and_test(entity_type: EntityType, entity_id: str, action_type: AIActionType, 
                           entity_name: str = None, entity_filepath: str = None, request_data: Dict[str, Any] = None, 
@@ -375,15 +295,7 @@ def register_batch_job(job_id: str):
         service_registry._batch_processing_active = True
         logger.info(f"Batch processing activated for job {job_id} ({len(_active_batch_jobs)} active batch jobs)")
 
-def unregister_batch_job(job_id: str):
-    """Unregister a batch job when completed"""
-    global _active_batch_jobs
-    _active_batch_jobs.discard(job_id)
-    
-    # Disable batch processing mode if no active batch jobs
-    if service_registry and not _active_batch_jobs:
-        service_registry._batch_processing_active = False
-        logger.info(f"Batch processing deactivated after job {job_id} completion (0 active batch jobs)")
+
 
 def is_batch_processing_active() -> bool:
     """Check if any batch jobs are currently active"""
@@ -625,369 +537,11 @@ def complete_ai_test(test_id: str, success: bool, response_data: Dict[str, Any] 
         
         interactions_service.track_interaction(interaction_data)
 
-# =============================================================================
-# Health and System Endpoints
-# =============================================================================
-
-@app.get("/api/v1/health", response_model=HealthCheckResponse)
-async def health_check():
-    """System health check endpoint"""
-    start_time = datetime.utcnow()
-    
-    # Check service registry status
-    healthy_services = service_registry.get_healthy_services() if service_registry else []
-    total_services = len(service_registry.services) if service_registry else 0
-    
-    # Calculate uptime (placeholder - you'd track this in production)
-    uptime = 3600.0  # 1 hour placeholder
-    
-    # Service dependency status
-    dependencies = {}
-    if service_registry:
-        for service in service_registry.services.values():
-            dependencies[service.name] = service.status.value
-    
-    processing_time = (datetime.utcnow() - start_time).total_seconds()
-    
-    # Get active queue information from database
-    queue_info = get_active_queue_status()
-    
-    return HealthCheckResponse(
-        success=True,
-        message=f"StashAI Server is healthy. {len(healthy_services)}/{total_services} services available",
-        service_name="stash-ai-server",
-        status="healthy" if len(healthy_services) > 0 else "degraded",
-        version="1.0.0",
-        uptime=uptime,
-        processing_time=processing_time,
-        dependencies=dependencies,
-        metrics={
-            "total_services": total_services,
-            "healthy_services": len(healthy_services),
-            "active_batch_jobs": queue_info.get("active_jobs_count", 0),
-            "queue_status": queue_info
-        }
-    )
-
-@app.get("/api/v1/database/status")
-async def get_database_status():
-    """Get database version and migration status"""
-    try:
-        database_path = db_manager.database_path
-        db_status = verify_database_version(database_path)
-        
-        return {
-            "success": True,
-            "database_path": database_path,
-            "current_version": db_status['current_version'],
-            "target_version": db_status['target_version'],
-            "schema_up_to_date": not db_status['needs_migration'],
-            "schema_available": db_status['schema_tables_exist'],
-            "table_status": db_status['table_status'],
-            "migration_required": db_status['needs_migration'],
-            "schema_compatibility": {
-                "legacy_v1_support": True,
-                "features_available": db_status['schema_tables_exist'],
-                "model_evaluators_available": db_status['table_status'].get('model_evaluators', False)
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"Failed to get database status: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "database_path": getattr(db_manager, 'database_path', 'unknown'),
-            "current_version": "unknown",
-            "target_version": CURRENT_SCHEMA_VERSION,
-            "schema_up_to_date": False,
-            "schema_available": False
-        }
-
-@app.get("/api/v1/services", response_model=List[ServiceInfo])
-async def list_services():
-    """List all registered services"""
-    if not service_registry:
-        raise HTTPException(status_code=503, detail="Service registry not available")
-    
-    return service_registry.list_all_services()
-
-@app.get("/api/v1/ai-jobs/evaluation-results")
-async def get_jobs_with_evaluation_results(limit: int = 50):
-    """Get jobs with detailed evaluation results"""
-    try:
-        jobs = interactions_service.get_jobs_with_evaluation_results(limit)
-        return {"success": True, "jobs": jobs}
-    except Exception as e:
-        logger.error(f"Failed to get jobs with evaluation results: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve evaluation results")
-
-@app.get("/api/v1/ai-jobs/evaluator-stats")
-async def get_model_evaluator_stats():
-    """Get model evaluator performance statistics"""
-    try:
-        stats = interactions_service.get_model_evaluator_stats()
-        return {"success": True, "stats": stats}
-    except Exception as e:
-        logger.error(f"Failed to get evaluator stats: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve evaluator statistics")
-
-@app.get("/api/v1/ai-jobs/evaluation-trends")
-async def get_evaluation_trends(days: int = 30):
-    """Get evaluation trends over time"""
-    try:
-        trends = interactions_service.get_evaluation_trends(days)
-        return {"success": True, "trends": trends}
-    except Exception as e:
-        logger.error(f"Failed to get evaluation trends: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve evaluation trends")
 
 # =============================================================================
 # AI Job and Test Management Endpoints
 # =============================================================================
 
-@app.get("/api/v1/ai-jobs/history")
-async def get_ai_job_history(
-    entity_type: Optional[str] = None,
-    entity_id: Optional[str] = None,
-    action_type: Optional[str] = None,
-    status: Optional[str] = None,
-    job_name: Optional[str] = None,
-    limit: int = 50,
-    offset: int = 0
-):
-    """Get AI job history with optional filters"""
-    try:
-        # Build query object
-        query = AIJobHistoryQuery(
-            entity_type=EntityType(entity_type) if entity_type else None,
-            entity_id=entity_id,
-            action_type=AIActionType(action_type) if action_type else None,
-            status=ProcessingStatus(status) if status else None,
-            job_name=job_name,
-            limit=min(limit, 100),  # Cap at 100
-            offset=offset
-        )
-        
-        history = interactions_service.query_ai_job_history(query)
-        return history.dict()
-        
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid parameter: {e}")
-    except Exception as e:
-        logger.error(f"Failed to get AI job history: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve AI job history")
-
-@app.get("/api/v1/ai-jobs/{job_id}")
-async def get_ai_job_details(job_id: str, include_results: bool = False, include_tests: bool = False):
-    """Get detailed information about a specific AI job"""
-    try:
-        job_info = interactions_service.get_ai_job(job_id)
-        if not job_info:
-            raise HTTPException(status_code=404, detail=f"AI job {job_id} not found")
-        
-        result = job_info.dict()
-        
-        if include_tests:
-            tests = interactions_service.get_tests_for_job(job_id)
-            result["tests"] = [test.dict() for test in tests]
-        
-        if include_results:
-            results = interactions_service.get_job_results(job_id)
-            if results:
-                result["detailed_results"] = results
-        
-        return result
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get AI job details for {job_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve AI job details")
-
-@app.get("/api/v1/ai-tests/{test_id}")
-async def get_ai_test_details(test_id: str):
-    """Get detailed information about a specific AI test"""
-    try:
-        test_info = interactions_service.get_ai_test(test_id)
-        if not test_info:
-            raise HTTPException(status_code=404, detail=f"AI test {test_id} not found")
-        
-        return test_info.dict()
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get AI test details for {test_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve AI test details")
-
-@app.get("/api/v1/ai-tests/{test_id}/results")
-async def get_ai_test_results(test_id: str):
-    """Get detailed results for a specific AI test including response data"""
-    try:
-        test_info = interactions_service.get_ai_test(test_id)
-        if not test_info:
-            raise HTTPException(status_code=404, detail=f"AI test {test_id} not found")
-        
-        # Return test info with full response data for overlay display
-        test_data = test_info.dict()
-        logger.info(f"Retrieved test {test_id}: response_data={bool(test_data.get('response_data'))} - Keys: {list(test_data.get('response_data', {}).keys()) if test_data.get('response_data') else 'None'}")
-        
-        # Transform response data to match overlay format expectations
-        if test_data.get('response_data'):
-            response = test_data['response_data']
-            
-            # For single image results (image processing)
-            if test_data.get('entity_type') == 'image' and 'performers' in response:
-                # Format as single image result
-                result = {
-                    'success': test_data.get('status') == 'completed',
-                    'performers': response.get('performers', []),
-                    'entity_id': test_data.get('entity_id'),
-                    'entity_type': test_data.get('entity_type'),
-                    'test_id': test_id,
-                    'processing_time': test_data.get('processing_time'),
-                    'confidence_scores': test_data.get('confidence_scores', []),
-                    'max_confidence': test_data.get('max_confidence')
-                }
-                return result
-            
-            # For gallery results (batch processing)
-            elif test_data.get('entity_type') == 'gallery' and 'performers' in response:
-                # Format as gallery batch result
-                result = {
-                    'success': test_data.get('status') == 'completed',
-                    'galleryId': test_data.get('entity_id'),
-                    'entity_type': test_data.get('entity_type'),
-                    'test_id': test_id,
-                    'performers': response.get('performers', []),
-                    'processingResults': response.get('processingResults', []),
-                    'totalImages': len(response.get('processingResults', [])),
-                    'processedImages': len([r for r in response.get('processingResults', []) if r.get('success')]),
-                    'skippedImages': len([r for r in response.get('processingResults', []) if not r.get('success')]),
-                    'totalProcessingTime': test_data.get('processing_time'),
-                    'error': test_data.get('error_message') if test_data.get('status') == 'failed' else None
-                }
-                return result
-            
-            # For scene results
-            elif test_data.get('entity_type') == 'scene' and 'performers' in response:
-                # Format as scene batch result
-                result = {
-                    'success': test_data.get('status') == 'completed',
-                    'sceneId': test_data.get('entity_id'),
-                    'entity_type': test_data.get('entity_type'),
-                    'test_id': test_id,
-                    'performers': response.get('performers', []),
-                    'processingResults': response.get('processingResults', []),
-                    'totalFrames': len(response.get('processingResults', [])),
-                    'processedFrames': len([r for r in response.get('processingResults', []) if r.get('success')]),
-                    'skippedFrames': len([r for r in response.get('processingResults', []) if not r.get('success')]),
-                    'totalProcessingTime': test_data.get('processing_time'),
-                    'error': test_data.get('error_message') if test_data.get('status') == 'failed' else None
-                }
-                return result
-        
-        # Fallback - return raw test data
-        return {
-            'success': test_data.get('status') == 'completed',
-            'test_id': test_id,
-            'entity_id': test_data.get('entity_id'),
-            'entity_type': test_data.get('entity_type'),
-            'rawResponse': test_data.get('response_data'),
-            'error': test_data.get('error_message') if test_data.get('status') == 'failed' else None
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get AI test results for {test_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve AI test results")
-
-@app.get("/api/v1/ai-jobs/{job_id}/tests")
-async def get_job_tests(job_id: str):
-    """Get all tests for a specific job"""
-    try:
-        # First verify job exists
-        job_info = interactions_service.get_ai_job(job_id)
-        if not job_info:
-            raise HTTPException(status_code=404, detail=f"AI job {job_id} not found")
-        
-        tests = interactions_service.get_tests_for_job(job_id)
-        return {"job_id": job_id, "tests": [test.dict() for test in tests]}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get tests for job {job_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve job tests")
-
-@app.post("/api/v1/ai-jobs/{job_id}/cancel")
-async def cancel_ai_job(job_id: str):
-    """Cancel an AI job and all its pending/processing tests"""
-    try:
-        result = interactions_service.cancel_ai_job(job_id)
-        if not result:
-            raise HTTPException(status_code=404, detail=f"AI job {job_id} not found or cannot be cancelled")
-        
-        # Unregister batch job when cancelled
-        unregister_batch_job(job_id)
-        
-        return {
-            "success": True,
-            "message": f"Successfully cancelled AI job {job_id}",
-            "job": result.dict(),
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to cancel AI job {job_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to cancel AI job")
-
-@app.post("/api/v1/ai-tests/{test_id}/cancel")
-async def cancel_ai_test(test_id: str):
-    """Cancel a specific AI test"""
-    try:
-        result = interactions_service.cancel_ai_test(test_id)
-        if not result:
-            raise HTTPException(status_code=404, detail=f"AI test {test_id} not found or cannot be cancelled")
-        
-        return {
-            "success": True,
-            "message": f"Successfully cancelled AI test {test_id}",
-            "test": result.dict(),
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to cancel AI test {test_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to cancel AI test")
-
-@app.post("/api/v1/ai-jobs", response_model=AIJobResponse)
-async def create_ai_job(job_data: AIJobCreate):
-    """Create a new AI job"""
-    try:
-        job_response = interactions_service.create_ai_job(job_data)
-        return job_response
-    except Exception as e:
-        logger.error(f"Failed to create AI job: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create AI job")
-
-@app.post("/api/v1/ai-jobs/{job_id}/tests", response_model=AITestResponse)
-async def create_ai_test(job_id: str, test_data: AITestCreate):
-    """Create a new AI test within a job"""
-    try:
-        test_response = interactions_service.create_ai_test(job_id, test_data)
-        return test_response
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Failed to create AI test: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create AI test")
 
 @app.get("/api/v1/entities/{entity_type}/{entity_id}/registry")
 async def get_entity_registry(entity_type: str, entity_id: str):
@@ -1409,7 +963,7 @@ async def identify_gallery_performers(request: GalleryIdentificationRequest, pro
                         logger.error(f"Failed to create AI_test record for gallery image {i}: {e}")
                 
                 # Process this image with Visage adapter and update test record
-                from services.visage_adapter import create_visage_adapter
+                from services.visage.visage_adapter import create_visage_adapter
                 async with create_visage_adapter() as visage:
                     # Get performers for this image without creating separate jobs
                     try:

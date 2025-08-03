@@ -123,13 +123,6 @@ class ServiceRegistry:
         """Get a specific service by name"""
         return self.services.get(name)
         
-    def get_services_by_type(self, service_type: ServiceType) -> List[RegisteredService]:
-        """Get all services of a specific type"""
-        return [
-            service for service in self.services.values()
-            if service.type == service_type
-        ]
-        
     def get_healthy_services(self, service_type: Optional[ServiceType] = None) -> List[RegisteredService]:
         """Get all healthy services, optionally filtered by type"""
         services = self.services.values()
@@ -268,83 +261,11 @@ class ServiceDiscovery:
     def __init__(self, registry: ServiceRegistry):
         self.registry = registry
         
-    def find_best_service(
-        self, 
-        service_type: ServiceType, 
-        capability: Optional[str] = None,
-        prefer_version: Optional[str] = None,
-        allow_busy: bool = True
-    ) -> Optional[RegisteredService]:
-        """
-        Find the best available service for a request
-        
-        Selection criteria:
-        1. Service must be available (healthy, degraded, or optionally busy)
-        2. Service must be of correct type
-        3. Service must have required capability (if specified)
-        4. Prefer specific version (if specified)
-        5. Prefer healthy over degraded over busy
-        6. Prefer services with fewer recent failures
-        """
-        # First try to get healthy services
-        candidates = self.registry.get_healthy_services(service_type)
-        
-        # If no healthy services and we allow busy/degraded services, expand search
-        if not candidates and allow_busy:
-            candidates = self.registry.get_available_services(service_type, include_busy=True)
-            
-        if not candidates:
-            return None
-            
-        # Filter by capability if specified
-        if capability:
-            candidates = [s for s in candidates if capability in s.capabilities]
-            
-        if not candidates:
-            return None
-            
-        # Prefer specific version if specified
-        if prefer_version:
-            version_matches = [s for s in candidates if s.version == prefer_version]
-            if version_matches:
-                candidates = version_matches
-                
-        # Sort by priority: HEALTHY > DEGRADED > BUSY, then by failures
-        def service_priority(service):
-            if service.status == ServiceStatus.HEALTHY:
-                return (0, service.consecutive_failures)
-            elif service.status == ServiceStatus.DEGRADED:
-                return (1, service.consecutive_failures)
-            elif service.status == ServiceStatus.BUSY:
-                return (2, service.consecutive_failures)
-            else:
-                return (99, service.consecutive_failures)
-        
-        candidates.sort(key=service_priority)
-        return candidates[0]
-    
     def set_batch_processing_active(self, active: bool):
         """Set batch processing active state to inform health checks"""
         self._batch_processing_active = active
         logger.info(f"Batch processing {'activated' if active else 'deactivated'}")
         
-    async def wait_for_service(
-        self, 
-        service_type: ServiceType, 
-        capability: Optional[str] = None,
-        timeout: int = 60
-    ) -> Optional[RegisteredService]:
-        """Wait for a service to become available"""
-        start_time = datetime.utcnow()
-        
-        while (datetime.utcnow() - start_time).total_seconds() < timeout:
-            service = self.find_best_service(service_type, capability)
-            if service:
-                return service
-                
-            await asyncio.sleep(1)
-            
-        return None
 
 class BatchProcessingContext:
     """Context manager for batch processing operations"""

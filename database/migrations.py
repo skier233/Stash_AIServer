@@ -656,7 +656,6 @@ class DatabaseMigrator:
             logger.error(f"Unsupported migration path from {current_version} to {CURRENT_SCHEMA_VERSION}")
             return False
 
-# Convenience functions
 def verify_database_version(database_path: str) -> Dict[str, Any]:
     """Verify database version and return status information"""
     migrator = DatabaseMigrator(database_path)
@@ -685,3 +684,62 @@ def run_startup_migration(database_path: str) -> bool:
     except Exception as e:
         logger.error(f"Startup migration failed: {e}")
         return False
+
+async def verify_and_migrate_database():
+    """Verify database version and run migrations on startup"""
+    try:
+        # Get database path from DATABASE_URL (for SQLite databases)
+        from database.database import DATABASE_URL
+        if DATABASE_URL.startswith("sqlite:///"):
+            database_path = DATABASE_URL.replace("sqlite:///", "")
+        else:
+            # For non-SQLite databases, use a fallback or skip migration
+            logger.info("Non-SQLite database detected - skipping file-based migration")
+            return
+            
+        logger.info(f"Using database path: {database_path}")
+        
+        # Verify current database status
+        db_status = verify_database_version(database_path)
+        
+        logger.info(f"Database version check:")
+        logger.info(f"  Current version: {db_status['current_version']}")
+        logger.info(f"  Target version: {db_status['target_version']}")
+        logger.info(f"  Needs migration: {db_status['needs_migration']}")
+        logger.info(f"  Schema tables exist: {db_status['schema_tables_exist']}")
+        
+        # Run migration if needed
+        if db_status['needs_migration']:
+            logger.info("Database migration required - starting migration process")
+            
+            migration_success = run_startup_migration(database_path)
+            
+            if migration_success:
+                logger.info(f"✅ Database successfully migrated to version {CURRENT_SCHEMA_VERSION}")
+                
+                # Verify migration completed successfully
+                updated_status = verify_database_version(database_path)
+                if updated_status['current_version'] == CURRENT_SCHEMA_VERSION:
+                    logger.info("✅ Migration verification passed")
+                else:
+                    logger.warning(f"⚠️ Migration verification failed - expected {CURRENT_SCHEMA_VERSION}, got {updated_status['current_version']}")
+            else:
+                logger.error("❌ Database migration failed - server may have compatibility issues")
+                logger.error("Please check migration logs and database backups")
+                # Don't raise exception - allow server to start with legacy support
+        else:
+            logger.info(f"✅ Database is up to date (version {db_status['current_version']})")
+        
+        # Log table status for debugging
+        if not db_status['schema_tables_exist']:
+            logger.info("Schema tables not fully available - running in legacy compatibility mode")
+            missing_tables = [table for table, exists in db_status['table_status'].items() if not exists]
+            if missing_tables:
+                logger.info(f"Missing schema tables: {missing_tables}")
+        else:
+            logger.info("✅ All schema tables are available")
+            
+    except Exception as e:
+        logger.error(f"Database verification/migration failed: {e}")
+        import traceback
+        logger.error(f"Migration error traceback: {traceback.format_exc()}")

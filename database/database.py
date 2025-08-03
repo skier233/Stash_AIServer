@@ -4,7 +4,8 @@
 
 import os
 import logging
-from typing import Generator, Optional
+from typing import Any, Dict, Generator, Optional
+from database.migrations import CURRENT_SCHEMA_VERSION, DatabaseMigrator
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import StaticPool
@@ -323,6 +324,9 @@ def initialize_database():
         logger.error(f"Database initialization failed: {e}")
         raise
 
+
+        # Don't raise - allow server to continue with legacy support
+
 # Initialize database when module is imported
 if __name__ != "__main__":
     try:
@@ -330,3 +334,11 @@ if __name__ != "__main__":
     except Exception as e:
         logger.warning(f"Database initialization failed during import: {e}")
         logger.warning("Database will be initialized when first accessed")
+
+
+def get_database_path() -> str:
+    """Get the path to the database file"""
+    if DATABASE_URL.startswith("sqlite"):
+        return DATABASE_URL.split("///")[-1]
+    else:
+        raise NotImplementedError("Database path retrieval is only implemented for SQLite")
