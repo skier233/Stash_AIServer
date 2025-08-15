@@ -14,9 +14,9 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
+# Create non-root user and data directory
 RUN useradd -m -u 1000 stash && \
-    mkdir -p /app && \
+    mkdir -p /app /app/data && \
     chown -R stash:stash /app
 
 # Set working directory
@@ -37,10 +37,10 @@ USER stash
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/api/v1/health || exit 1
+    CMD curl -f http://localhost:9998/health || exit 1
 
 # Expose port
-EXPOSE 8080
+EXPOSE 9998
 
 # Run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "9998"]

@@ -33,6 +33,13 @@ pytest-mock==3.14.0
 sqlalchemy==2.0.36
 alembic==1.13.3
 
+# Queue and task management
+huey==2.5.0
+
+# Retry logic and monitoring
+tenacity==8.2.3
+prometheus-client==0.19.0
+
 # Optional: Additional utilities
 click==8.1.7
 rich==13.9.4

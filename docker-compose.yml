@@ -1,73 +1,86 @@
 # =============================================================================
-# StashAI Server - Docker Compose Configuration
+# StashAI Server - Docker Compose Configuration (Simplified)
 # =============================================================================
 
-
 services:
-  # StashAI Gateway Service
+  # StashAI Server - Main API Gateway
   stash-ai-server:
     build: 
       context: .
       dockerfile: Dockerfile
     container_name: stash-ai-server
     ports:
-      - "8080:8080"
+      - "9998:9998"
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=info
-      - VISAGE_URL=http://visage:8000
+      - QUEUE_DB_PATH=/app/data/queue.db
+      - QUEUE_ENABLED=true
+      - DIRECT_MODE=false
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
-    depends_on:
-      - visage
+      - .:/app
     networks:
       - stash-ai-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9998/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 15s
+
+  # Huey Worker - Background Task Processing
+  huey-worker:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: stash-ai-huey-worker
+    command: python worker.py
+    environment:
+      - PYTHONPATH=/app
+      - LOG_LEVEL=info
+      - QUEUE_DB_PATH=/app/data/queue.db
+      - QUEUE_ENABLED=true
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - .:/app
+    networks:
+      - stash-ai-network
+    restart: unless-stopped
 
   # Visage Facial Recognition Service
   visage:
     build:
-      context: ./BackendServers/visage
+      context: ./Services/visage
       dockerfile: Dockerfile
-    container_name: visage
+    container_name: stash-ai-visage
     ports:
-      - "8000:8000"
-      - "7860:7860"  # Gradio interface
+      - "9997:8000"  # Map external port 9997 to internal FastAPI port 8000
+      - "7860:7860"  # Gradio web interface
     environment:
-      - MPLCONFIGDIR=/code/matplotlib
-      - DEEPFACE_HOME=/code/.deepface
+      - PYTHONPATH=/app
     volumes:
-      - visage-models:/code/models
-      - visage-data:/code/data
-      - visage-deepface:/code/.deepface
+      - visage-models:/app/models
+      - visage-data:/app/data
     networks:
       - stash-ai-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/person_names"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 60s
       timeout: 30s
       retries: 3
-      start_period: 120s
+      start_period: 60s
 
 volumes:
   visage-models:
     driver: local
   visage-data:
     driver: local
-  visage-deepface:
-    driver: local
 
 networks:
   stash-ai-network:
     driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16
