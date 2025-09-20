@@ -1,0 +1,42 @@
+name: AIOverhaul
+description: Advanced AI integration plugin for Stash
+version: 1.0.0
+ui:
+  javascript:
+  - dist/UniversalGraphQL.js
+  - dist/MutateGraphQL.js
+  - dist/ImageHandler.js
+  - dist/VisageImageResults.js
+  - dist/AIResultsOverlayGalleries.js
+  - dist/WebSocketManager.js
+  - dist/SettingsPage.js
+  - dist/AIButton.js
+  css:
+  - src/css/AIOverhaul.css
+  - src/css/AIButton.css
+  csp:
+    connect-src:
+      # StashAI Server connections
+      - http://localhost:9998
+      - https://localhost:9998
+      - http://*:9998
+      - https://*:9998
+      - ws://localhost:9998
+      - wss://localhost:9998
+      - ws://*:9998
+      - wss://*:9998
+      # AI Service ports
+      - http://localhost:9997
+      - http://*:9997
+      - http://localhost:9999  
+      - http://*:9999
+      - http://localhost:9996
+      - http://*:9996
+      # Allow connections to any local network addresses
+      - http://10.0.0.0/8:*
+      - http://192.168.0.0/16:*
+      - http://172.16.0.0/12:*
+      - ws://10.0.0.0/8:*
+      - ws://192.168.0.0/16:*
+      - ws://172.16.0.0/12:*
+interface: raw
