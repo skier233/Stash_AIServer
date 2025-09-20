@@ -1,0 +1,120 @@
+/* =============================================================================
+   New AI Button CSS - Clean styling for the responsive AI button
+   ============================================================================= */
+
+/* Pulse animation for processing state */
+@keyframes pulse {
+  0%, 100% { 
+    opacity: 1; 
+  }
+  50% { 
+    opacity: 0.7; 
+  }
+}
+
+/* New AI Button container */
+.new-ai-button {
+  position: relative;
+  display: inline-block;
+}
+
+/* Main button styling */
+.new-ai-button button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  background-color: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  color: #ffffff;
+}
+
+/* Processing state */
+.new-ai-button button.processing {
+  background-color: rgba(74, 222, 128, 0.2);
+  animation: pulse 2s infinite;
+}
+
+/* Hover effects */
+.new-ai-button button:hover {
+  transform: scale(1.05);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+/* Active/click effect */
+.new-ai-button button:active {
+  transform: scale(0.95);
+}
+
+/* Dropdown menu */
+.new-ai-button .dropdown {
+  position: absolute;
+  top: 45px;
+  right: 0;
+  min-width: 280px;
+  background-color: #1f2937;
+  border: 1px solid #374151;
+  border-radius: 8px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  z-index: 1000;
+  padding: 8px;
+}
+
+/* Dropdown header */
+.new-ai-button .dropdown-header {
+  padding: 8px 12px;
+  border-bottom: 1px solid #374151;
+  margin-bottom: 8px;
+}
+
+.new-ai-button .dropdown-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #f9fafb;
+}
+
+.new-ai-button .dropdown-header p {
+  margin: 4px 0 0 0;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+/* Dropdown content */
+.new-ai-button .dropdown-content {
+  padding: 0;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+/* Service items */
+.new-ai-button .service-item {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 0.2s ease;
+}
+
+.new-ai-button .service-item:hover {
+  background-color: rgba(59, 130, 246, 0.1);
+}
+
+.new-ai-button .service-item:active {
+  background-color: rgba(59, 130, 246, 0.2);
+}
+
+/* SVG icon styling */
+.new-ai-button svg {
+  filter: none;
+  transition: filter 0.2s ease;
+}
+
+.new-ai-button button.processing svg {
+  filter: brightness(1.2);
+}

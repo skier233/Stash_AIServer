@@ -6,7 +6,6 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
-from core.config import config as app_config
 from Database.database import get_db_session
 from Database.models import UserInteraction, UserSession
 
@@ -540,19 +539,17 @@ async def create_visage_batch_job(request: Request):
     """
     try:
         from api.VisageFrontendAdapter import create_visage_job_with_api_url
-
+        
         data = await request.json()
         images = data.get("images", [])
-        # Ignore any client-provided URL; always use backend-configured value
-        visage_api_url = app_config.VISAGE_API_URL
+        visage_api_url = data.get("visage_api_url")
         config = data.get("config", {})
         
         if not images:
             raise HTTPException(status_code=400, detail="No images provided")
         
-        # If not provided, we fall back to centrally configured URL
         if not visage_api_url:
-            raise HTTPException(status_code=500, detail="VISAGE_API_URL not configured on server")
+            raise HTTPException(status_code=400, detail="No visage_api_url provided")
         
         # Create the batch job
         result = create_visage_job_with_api_url(
@@ -622,8 +619,7 @@ async def create_visage_single_task(request: Request):
             service_config = config.get("service_config", {})
             
             image_data = image_data_obj.get("image_base64")
-            # Ignore any client-provided URL; always use backend-configured value
-            visage_api_url = app_config.VISAGE_API_URL
+            visage_api_url = service_config.get("api_endpoint", "http://localhost:5000/api/predict_1")
             threshold = config.get("threshold", 0.7)
             
             additional_params = {
@@ -639,8 +635,7 @@ async def create_visage_single_task(request: Request):
         else:
             # Legacy format
             image_data = data.get("image")
-            # Ignore any client-provided URL; always use backend-configured value
-            visage_api_url = app_config.VISAGE_API_URL
+            visage_api_url = data.get("visage_api_url")
             config = data.get("config", {})
             threshold = config.get("threshold", 0.5)
             additional_params = config.get("additional_params", {})
@@ -649,7 +644,7 @@ async def create_visage_single_task(request: Request):
             raise HTTPException(status_code=400, detail="No image data provided")
         
         if not visage_api_url:
-            raise HTTPException(status_code=500, detail="VISAGE_API_URL not configured on server")
+            raise HTTPException(status_code=400, detail="No visage_api_url provided")
         
         # Create the single task
         result = create_single_visage_task_with_api_url(
@@ -953,9 +948,8 @@ async def create_content_analysis_task(request: Request):
         image_data = image_data_obj.get("image_base64")
         if not image_data:
             raise HTTPException(status_code=400, detail="No image data provided")
-
-        # Ignore any client-provided endpoint; always use backend-configured value
-        api_endpoint = app_config.CONTENT_ANALYSIS_API_URL
+        
+        api_endpoint = service_config.get("api_endpoint", "http://localhost:5001/api/analyze")
         
         # Create content analysis task
         result = create_content_analysis_task_with_config(
@@ -1020,9 +1014,8 @@ async def create_scene_analysis_task(request: Request):
         content_data = image_data_obj.get("image_base64")  # Could be image or video data
         if not content_data:
             raise HTTPException(status_code=400, detail="No content data provided")
-
-        # Ignore any client-provided endpoint; always use backend-configured value
-        api_endpoint = app_config.SCENE_ANALYSIS_API_URL
+        
+        api_endpoint = service_config.get("api_endpoint", "http://localhost:5002/api/analyze_scene")
         
         # Create scene analysis task
         result = create_scene_analysis_task_with_config(

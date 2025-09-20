@@ -12,7 +12,6 @@ import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 import httpx
-from core.config import config
 
 from Services.queue.huey_app import huey, DEFAULT_RETRY_CONFIG
 from Database.data.visage_adapter import VisageDatabaseAdapter, VisageTaskTypes
@@ -55,14 +54,13 @@ def visage_face_identify_task(task_data: Dict[str, Any]) -> Dict[str, Any]:
         
         # Update task status to running
         adapter.update_task_status(task_id, TaskStatus.RUNNING.value)
-
+        
         # Extract input data
         input_data = task_data.get("input_data", {})
-        image_data = input_data.get("image")  # Base64 encoded image data or URL
+        image_data = input_data.get("image")  # This should contain the base64 image data
         threshold = input_data.get("threshold", 0.5)
-        # Determine endpoint from centralized config if not provided by caller
-        visage_api_url = config.VISAGE_API_URL
-
+        visage_api_url = input_data.get("visage_api_url", "http://localhost:9997/api/predict_1")
+        
         # Convert external URLs to internal Docker network URLs for container communication
         # DISABLED: This conversion was causing API failures when not running in Docker
         # if "10.0.0.154:9997" in visage_api_url or "localhost:9997" in visage_api_url:
@@ -70,25 +68,21 @@ def visage_face_identify_task(task_data: Dict[str, Any]) -> Dict[str, Any]:
         #     original_url = visage_api_url
         #     visage_api_url = visage_api_url.replace("10.0.0.154:9997", "visage:8000").replace("localhost:9997", "visage:8000")
         #     logger.info(f"Converted external URL to internal Docker network URL: {original_url} -> {visage_api_url}")
-
         additional_params = input_data.get("additional_params", {})
-
-        logger.info(
-            f"Task input data for {task_id}: image_data_length={len(image_data) if image_data else 0}, "
-            f"threshold={threshold}, visage_api_url={visage_api_url}"
-        )
-
+        
+        logger.info(f"Task input data for {task_id}: image_data_length={len(image_data) if image_data else 0}, threshold={threshold}, visage_api_url={visage_api_url}")
+        
         if not image_data:
             raise ValueError("No image data provided")
-
+        
         if not visage_api_url:
-            raise ValueError("No Visage API URL configured (VISAGE_API_URL)")
-
+            raise ValueError("No Visage API URL provided")
+        
         # Check again for cancellation before making the API call
         if queue_processor.is_task_cancelled(task_id):
             logger.info(f"Task {task_id} was cancelled before API call, stopping")
             return {"status": "cancelled", "task_id": task_id}
-
+        
         # Call actual Visage API
         processing_start_time = datetime.now()
         
@@ -131,8 +125,8 @@ def visage_face_identify_task(task_data: Dict[str, Any]) -> Dict[str, Any]:
                 logger.error(f"Health check also failed: {str(health_e)}")
             
             # NEVER return mock data - fail the task instead
-            raise ValueError(f"Visage API is unavailable: {str(e)}, url: {visage_api_url}")
-
+            raise ValueError(f"Visage API is unavailable: {str(e)}")
+            
         except httpx.HTTPStatusError as e:
             logger.error(f"Visage API HTTP error for task {task_id}: {e.response.status_code}")
             raise ValueError(f"Visage API returned error: {e.response.status_code}")
@@ -205,7 +199,7 @@ def visage_batch_coordinator_task(job_data: Dict[str, Any]) -> Dict[str, Any]:
             task_input_data = {
                 "image": image_data,
                 "threshold": task_config.get("threshold", 0.5),
-                "visage_api_url": config.VISAGE_API_URL,
+                "visage_api_url": task_config.get("visage_api_url", "http://localhost:5000/api/identify"),
                 "additional_params": task_config.get("additional_params", {}),
                 "batch_index": i
             }
@@ -244,7 +238,7 @@ def visage_batch_coordinator_task(job_data: Dict[str, Any]) -> Dict[str, Any]:
             "tasks_created": len(created_task_ids),
             "task_ids": created_task_ids,
             "status": "coordinated",
-            "visage_api_url": task_config.get("visage_api_url", config.VISAGE_API_URL)
+            "visage_api_url": task_config.get("visage_api_url", "http://localhost:5000/api/identify")
         }
         
         logger.info(f"Visage batch coordination completed for job {job_id}: {len(created_task_ids)} tasks created")
@@ -266,7 +260,7 @@ def visage_batch_coordinator_task(job_data: Dict[str, Any]) -> Dict[str, Any]:
 
 def create_visage_job_with_api_url(
     images: list,
-    visage_api_url: str | None = None,
+    visage_api_url: str,
     threshold: float = 0.5,
     job_name: Optional[str] = None,
     user_id: Optional[str] = None,
@@ -278,7 +272,7 @@ def create_visage_job_with_api_url(
     
     Args:
         images: List of image data (base64 or URLs)
-    visage_api_url: External Visage API endpoint URL. If not provided, uses config.VISAGE_API_URL
+        visage_api_url: External Visage API endpoint URL
         threshold: Recognition threshold (0.0-1.0)
         job_name: Human-readable job name
         user_id: Optional user ID
@@ -292,9 +286,6 @@ def create_visage_job_with_api_url(
     
     adapter = VisageDatabaseAdapter()
     
-    # Resolve API URL
-    visage_api_url = config.VISAGE_API_URL
-
     # Create job
     job_id = adapter.create_job(
         job_type=VisageJobTypes.BULK_FACE_IDENTIFICATION,
@@ -332,7 +323,7 @@ def create_visage_job_with_api_url(
 
 def create_single_visage_task_with_api_url(
     image_data: str,
-    visage_api_url: str | None = None,
+    visage_api_url: str,
     threshold: float = 0.5,
     additional_params: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
@@ -343,7 +334,7 @@ def create_single_visage_task_with_api_url(
     
     Args:
         image_data: Base64 encoded image data or image URL
-    visage_api_url: External Visage API endpoint URL. If not provided, uses config.VISAGE_API_URL
+        visage_api_url: External Visage API endpoint URL
         threshold: Recognition threshold (0.0-1.0)
         additional_params: Extra parameters for Visage API (can include entity tracking)
         
@@ -355,9 +346,6 @@ def create_single_visage_task_with_api_url(
     adapter = VisageDatabaseAdapter()
     
     # Prepare input data with entity tracking if provided
-    # Resolve API URL
-    visage_api_url = config.VISAGE_API_URL
-
     input_data = {
         "image": image_data,
         "threshold": threshold,
