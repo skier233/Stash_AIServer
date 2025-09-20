@@ -6,31 +6,37 @@ import logging
 import asyncio
 import aiohttp
 from typing import Dict, Any, Optional
+from core.config import config
 from Database.data.scene_analysis_adapter import SceneAnalysisDatabaseAdapter, SceneAnalysisTaskTypes
 
 logger = logging.getLogger(__name__)
 
-async def call_scene_analysis_api(api_endpoint: str, content_data: str, config: Dict[str, Any]) -> Dict[str, Any]:
+async def call_scene_analysis_api(api_endpoint: Optional[str], content_data: str, config_dict: Dict[str, Any]) -> Dict[str, Any]:
     """
     Call external scene analysis API with content data
     
     Args:
-        api_endpoint: URL of the scene analysis API
+    api_endpoint: URL of the scene analysis API (optional; defaults to config.SCENE_ANALYSIS_API_URL)
         content_data: Base64 encoded content data (could be image or video)
-        config: Configuration parameters
+    config_dict: Configuration parameters
         
     Returns:
         Dict containing API response data
     """
     try:
+        # Resolve endpoint from centralized configuration if not provided
+        api_endpoint = api_endpoint or config.SCENE_ANALYSIS_API_URL
+        if not api_endpoint:
+            raise Exception("No Scene Analysis API URL configured (SCENE_ANALYSIS_API_URL)")
+
         payload = {
             "content": content_data,
-            "extract_keyframes": config.get("extract_keyframes", False),
-            "analyze_audio": config.get("analyze_audio", False),
-            "scene_detection": config.get("scene_detection", True),
-            "object_detection": config.get("object_detection", True),
-            "max_scenes": config.get("max_scenes", 10),
-            "confidence_threshold": config.get("confidence_threshold", 0.5)
+            "extract_keyframes": config_dict.get("extract_keyframes", False),
+            "analyze_audio": config_dict.get("analyze_audio", False),
+            "scene_detection": config_dict.get("scene_detection", True),
+            "object_detection": config_dict.get("object_detection", True),
+            "max_scenes": config_dict.get("max_scenes", 10),
+            "confidence_threshold": config_dict.get("confidence_threshold", 0.5)
         }
         
         timeout = aiohttp.ClientTimeout(total=300)  # 5 minute timeout for scene analysis
@@ -57,7 +63,7 @@ async def call_scene_analysis_api(api_endpoint: str, content_data: str, config: 
 
 def create_scene_analysis_task_with_config(
     content_data: str,
-    api_endpoint: str,
+    api_endpoint: Optional[str] = None,
     stash_content_id: Optional[str] = None,
     stash_content_title: Optional[str] = None,
     stash_metadata: Optional[Dict[str, Any]] = None,
@@ -68,7 +74,7 @@ def create_scene_analysis_task_with_config(
     
     Args:
         content_data: Base64 encoded content data
-        api_endpoint: URL of the scene analysis API
+    api_endpoint: URL of the scene analysis API (optional; defaults to config.SCENE_ANALYSIS_API_URL)
         stash_content_id: Stash content ID for reference
         stash_content_title: Content title from Stash
         stash_metadata: Additional metadata from Stash
@@ -82,6 +88,8 @@ def create_scene_analysis_task_with_config(
         
         config = config or {}
         stash_metadata = stash_metadata or {}
+        from core.config import config as app_config
+        api_endpoint = app_config.SCENE_ANALYSIS_API_URL
         
         # Create database adapter
         adapter = SceneAnalysisDatabaseAdapter()

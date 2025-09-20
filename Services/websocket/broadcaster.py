@@ -7,6 +7,7 @@ import asyncio
 import httpx
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
+from core.config import config
 
 logger = logging.getLogger(__name__)
 
@@ -69,9 +70,9 @@ class QueueEventBroadcaster:
             # Try Docker service name first (for containerized environments)
             # Then fallback to localhost for development
             possible_bases = [
-                "http://stash-ai-server:9998",  # Docker service name
-                "http://localhost:9998",        # Local development
-                "http://127.0.0.1:9998",       # Loopback fallback
+                config.STASH_INTERNAL_BASE_URL,
+                config.STASH_LOCAL_BASE_URL,
+                config.STASH_LOOPBACK_BASE_URL,
             ]
             
             # Try each base URL until one works
